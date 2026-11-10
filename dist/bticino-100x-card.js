@@ -247,6 +247,7 @@ const EDITOR_LABELS = {
     layout_panel: 'Panel - a small Classe 100X above the card',
     layout_device: 'Device - the drawing is the card',
     layout_compact: 'Compact - no drawing (default)',
+    layout_kiosk: 'Kiosk - full screen, for a wall tablet',
     device_size: 'Drawing size',
   },
   it: {
@@ -271,6 +272,7 @@ const EDITOR_LABELS = {
     layout_panel: 'Pannello - Classe 100X piccolo sopra la card',
     layout_device: 'Dispositivo - il disegno è la card',
     layout_compact: 'Compatta - senza disegno (predefinita)',
+    layout_kiosk: 'Chiosco - a tutto schermo, per tablet da parete',
     device_size: 'Dimensione del citofono',
   },
 };
@@ -1043,6 +1045,8 @@ const STYLE = `
   --bt-screen: var(--bticino-screen-color, #0d1116);
 }
 ha-card { height: 100%; overflow: hidden; }
+/* the kiosk fills its view, so the host has to carry a height of its own */
+:host([data-layout='kiosk']) { height: 100%; }
 .card {
   display: flex;
   flex-direction: column;
@@ -1497,6 +1501,55 @@ dialog[open]::backdrop { opacity: 1; }
 /* --- device layout ------------------------------------------------------ */
 [data-layout="device"] .device-caption { display: none; }
 [data-layout="compact"] .device-wrap { display: none; }
+
+/* --- kiosk: a wall tablet or a View Assist screen, landscape ------------
+   The card fills whatever it is given and never scrolls: the picture takes
+   the room, the two call actions are big enough to hit while walking past,
+   and everything that reads rather than acts is left out. */
+[data-layout="kiosk"] {
+  height: 100%; gap: var(--ha-space-2, 8px);
+  /* the height is definite here, so the card can be asked about its shape
+     and not only its width, which inline-size alone cannot answer */
+  container-type: size;
+}
+[data-layout="kiosk"] .device-wrap,
+[data-layout="kiosk"] .badges,
+[data-layout="kiosk"] .expander,
+[data-layout="kiosk"] .history { display: none; }
+[data-layout="kiosk"] .head { min-height: 0; }
+[data-layout="kiosk"] .primary { font-size: var(--ha-font-size-l, 16px); line-height: 22px; }
+[data-layout="kiosk"] .body {
+  flex: 1 1 auto; min-height: 0; flex-direction: row; align-items: stretch;
+  gap: var(--ha-space-3, 12px);
+}
+[data-layout="kiosk"] .preview,
+[data-layout="kiosk"] .stream {
+  flex: 1 1 auto; min-width: 0; min-height: 0; max-width: none; align-self: stretch;
+}
+[data-layout="kiosk"] .preview-img {
+  width: 100%; height: 100%; object-fit: contain; background: var(--bt-screen);
+}
+[data-layout="kiosk"] .stream-video {
+  /* the box is given, so the picture fits inside it instead of sizing it */
+  width: 100%; height: 100%; aspect-ratio: auto; object-fit: contain;
+}
+[data-layout="kiosk"] .content { flex: 0 0 min(38%, 260px); justify-content: center; min-width: 0; }
+[data-layout="kiosk"] .features { flex-direction: column; gap: 10px; }
+/* a column of buttons must keep its height: flex-basis 0 would collapse it */
+[data-layout="kiosk"] .button {
+  flex: 0 0 60px; height: 60px; font-size: var(--ha-font-size-l, 16px); --mdc-icon-size: 26px;
+}
+[data-layout="kiosk"] .button .text { display: block; }
+/* upright screens put the actions under the picture instead of beside it */
+@container (max-aspect-ratio: 1/1) {
+  [data-layout="kiosk"] .body { flex-direction: column; }
+  [data-layout="kiosk"] .content { flex: 0 0 auto; }
+  [data-layout="kiosk"] .features { flex-direction: row; }
+  /* across a narrow screen there is no room for words: the icons are large
+     and the colours carry answer and reject on their own */
+  [data-layout="kiosk"] .button { flex: 1 1 0; }
+  [data-layout="kiosk"] .button .text { display: none; }
+}
 [data-layout="device"] .bt-key[role="button"] { cursor: pointer; }
 [data-layout="device"] .bt-key[role="button"]:hover .bt-glyph { fill: var(--tile-color); }
 [data-layout="device"] .bt-key[role="button"]:focus-visible .bt-hit {
@@ -1645,8 +1698,10 @@ class Bticino100xCard extends HTMLElement {
     // show_device: false was how the drawing used to be turned off
     if (this._config.show_device === false) this._config.layout = 'compact';
     delete this._config.show_device;
-    if (!['panel', 'device', 'compact'].includes(this._config.layout)) this._config.layout = 'panel';
+    if (!['panel', 'device', 'compact', 'kiosk'].includes(this._config.layout)) this._config.layout = 'compact';
     this.style.setProperty('--bt-accent', colorVar(this._config.color || 'blue'));
+    // the layout has to be readable from outside the shadow root as well
+    this.dataset.layout = this._config.layout;
     this._root = null; // the layout drives the skeleton, so rebuild it
     this.shadowRoot.innerHTML = '';
     if (this._hass) this._render();
@@ -1685,7 +1740,7 @@ class Bticino100xCard extends HTMLElement {
   }
 
   getCardSize() {
-    const sizes = { device: 6, panel: 4, compact: 3 };
+    const sizes = { device: 6, panel: 4, compact: 3, kiosk: 8 };
     const base = sizes[this._config?.layout] ?? 4;
     return this._expanded ? base + 2 : base;
   }
@@ -2097,12 +2152,15 @@ class Bticino100xCard extends HTMLElement {
   _syncRingingPreview(status) {
     const nodes = this._root;
     const picture = this._hass.states[this._found.snapshot]?.attributes.entity_picture;
-    const show = status.ringing && !this._stream && !!picture;
+    // a kiosk has nothing else to put on screen, so it keeps the last frame up
+    const wanted = status.ringing || this._config.layout === 'kiosk';
+    const show = wanted && !this._stream && !!picture;
     nodes.preview.hidden = !show;
     if (!show) return;
     if (nodes.previewImg.getAttribute('src') !== picture) nodes.previewImg.setAttribute('src', picture);
     const unit = this._activeUnit(status);
-    nodes.previewText.textContent = unit?.name || t(this._hass, 'ringing');
+    nodes.previewIcon.setAttribute('icon', status.ringing ? 'mdi:bell-ring' : 'mdi:cctv');
+    nodes.previewText.textContent = unit?.name || t(this._hass, status.ringing ? 'ringing' : 'standby');
     nodes.preview.setAttribute('aria-label', `${t(this._hass, 'answer')} - ${unit?.name || ''}`.trim());
   }
 
@@ -2844,6 +2902,7 @@ const editorSchema = (hass, config) => [
           { value: 'compact', label: te(hass, 'layout_compact') },
           { value: 'panel', label: te(hass, 'layout_panel') },
           { value: 'device', label: te(hass, 'layout_device') },
+          { value: 'kiosk', label: te(hass, 'layout_kiosk') },
         ],
       },
     },
