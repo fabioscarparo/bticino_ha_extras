@@ -163,7 +163,8 @@ entrance it is.
 
 **On a wall tablet.** `layout: kiosk` turns the card into the screen a phone shows while it rings:
 the entrance fills it, the name and what it is doing sit over the top, and the actions are round
-buttons along the bottom - green to answer, red to hang up. It takes the height it is given, so in
+buttons along the bottom - green to answer, red to hang up, and once the call is up the microphone
+and the sound join them there, turning solid while muted the way a phone shows it. It takes the height it is given, so in
 a panel view or on a View Assist screen it fills the display, landscape or upright; the picture
 becomes live video as soon as the call is answered, the whole screen is ringed in the accent
 colour while it rings, and the tabs float over the top so the entrance that rings selects itself.

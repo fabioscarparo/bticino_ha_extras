@@ -2526,6 +2526,8 @@ var STRINGS = {
     mic_insecure: "The microphone needs a secure connection: open Home Assistant over https",
     sound_on: "Sound on",
     sound_off: "Sound off",
+    mic: "Microphone",
+    sound: "Audio",
     browser_warning: "Chrome or another Chromium browser is needed for audio and video."
   },
   it: {
@@ -2567,6 +2569,8 @@ var STRINGS = {
     mic_insecure: "Il microfono richiede una connessione sicura: apri Home Assistant in https",
     sound_on: "Audio acceso",
     sound_off: "Audio spento",
+    mic: "Microfono",
+    sound: "Audio",
     browser_warning: "Per audio e video serve Chrome o un browser Chromium."
   },
   fr: {
@@ -2608,6 +2612,8 @@ var STRINGS = {
     mic_insecure: "Le micro exige une connexion sécurisée: ouvrez Home Assistant en https",
     sound_on: "Son actif",
     sound_off: "Son coupé",
+    mic: "Micro",
+    sound: "Son",
     browser_warning: "Chrome ou un navigateur Chromium est necessaire pour l audio et la video."
   },
   de: {
@@ -2649,6 +2655,8 @@ var STRINGS = {
     mic_insecure: "Das Mikrofon braucht eine sichere Verbindung: öffne Home Assistant über https",
     sound_on: "Ton an",
     sound_off: "Ton aus",
+    mic: "Mikrofon",
+    sound: "Ton",
     browser_warning: "Für Ton und Bild wird Chrome oder ein Chromium-Browser benötigt."
   },
   es: {
@@ -2690,6 +2698,8 @@ var STRINGS = {
     mic_insecure: "El micrófono necesita una conexión segura: abre Home Assistant en https",
     sound_on: "Sonido activado",
     sound_off: "Sonido apagado",
+    mic: "Micrófono",
+    sound: "Sonido",
     browser_warning: "Para audio y video hace falta Chrome u otro navegador Chromium."
   }
 };
@@ -3634,12 +3644,11 @@ dialog[open]::backdrop { opacity: 1; }
 [data-layout="kiosk"] .button .text { display: block; max-width: 100%; }
 /* answering and hanging up are told apart by colour, so the row stays even */
 
-/* the call controls keep clear of the buttons */
-[data-layout="kiosk"] .stream-controls {
-  z-index: 4; bottom: auto; top: var(--ha-space-3, 12px); inset-inline-end: var(--ha-space-3, 12px);
-}
-[data-layout="kiosk"] .stream-controls .icon-button { width: 48px; height: 48px; --mdc-icon-size: 24px; }
-[data-layout="kiosk"] .stream-controls .icon-button::before { background: rgba(0, 0, 0, 0.45); opacity: 1; }
+/* the call's own controls are in the row below, so the corner stays clear */
+[data-layout="kiosk"] .stream-controls { display: none; }
+/* a muted microphone or speaker turns solid, the way a phone shows mute */
+[data-layout="kiosk"] .button.muted::before { background: var(--text-primary-color, #fff); }
+[data-layout="kiosk"] .button.muted ha-icon { color: var(--bt-screen); }
 
 /* a ring around the whole screen, seen from across the room */
 [data-layout="kiosk"].ringing::after {
@@ -4407,6 +4416,38 @@ var Bticino100xCard = class extends HTMLElement {
       });
     }
     for (const action of this._extraActions()) buttons.push(action);
+    if (this._config.layout === "kiosk" && this._stream) {
+      const session = this._session;
+      const live = session?.state === CALL_STATE.LIVE;
+      const micOn = !!session?.micActive;
+      const controls = [
+        {
+          key: "mic",
+          icon: micOn ? "mdi:microphone" : "mdi:microphone-off",
+          text: t(hass, "mic"),
+          label: t(hass, micOn ? "mic_on" : "mic_off"),
+          // switched off is the state worth noticing, the way a phone shows
+          // mute - but only once the call is up: before that it is not muted,
+          // it simply is not live yet
+          variant: live && !micOn ? "muted" : "",
+          disabled: !live,
+          action: () => this._toggleMic()
+        }
+      ];
+      if (!(this._stream.mode === "audio" && !live)) {
+        controls.push({
+          key: "sound",
+          icon: this._soundOn ? "mdi:volume-high" : "mdi:volume-off",
+          text: t(hass, "sound"),
+          label: t(hass, this._soundOn ? "sound_on" : "sound_off"),
+          variant: this._soundOn ? "" : "muted",
+          disabled: false,
+          action: () => this._toggleSound()
+        });
+      }
+      const hangUp = buttons.findIndex((b) => b.icon === "mdi:phone-hangup" && b.key !== "reject");
+      buttons.splice(hangUp < 0 ? buttons.length : hangUp, 0, ...controls);
+    }
     const signature = buttons.map((b) => b.key).join("|");
     if (this._buttonSignature !== signature) {
       nodes.features.innerHTML = "";
@@ -4417,8 +4458,8 @@ var Bticino100xCard = class extends HTMLElement {
           icon(button.icon),
           label
         ]);
-        node.title = button.text;
-        node.setAttribute("aria-label", button.text);
+        node.title = button.label || button.text;
+        node.setAttribute("aria-label", button.label || button.text);
         nodes.features.appendChild(node);
         this._buttonNodes[button.key] = { node, label, icon: node.querySelector("ha-icon") };
       }
@@ -4432,8 +4473,8 @@ var Bticino100xCard = class extends HTMLElement {
       refs.node.disabled = button.disabled;
       refs.label.textContent = button.text;
       refs.icon.setAttribute("icon", button.icon);
-      refs.node.title = button.text;
-      refs.node.setAttribute("aria-label", button.text);
+      refs.node.title = button.label || button.text;
+      refs.node.setAttribute("aria-label", button.label || button.text);
       const justOpened = button.key.startsWith("lock-") && button.variant === "success" && refs.variant !== "success";
       if (justOpened) {
         refs.node.classList.remove("flash");
@@ -4531,6 +4572,7 @@ var Bticino100xCard = class extends HTMLElement {
     this._syncStream();
   }
   _syncStream() {
+    if (this._config.layout === "kiosk" && this._config.show_controls) this._syncButtons(this._status());
     const hass = this._hass;
     const nodes = this._root;
     const stream = this._stream;
