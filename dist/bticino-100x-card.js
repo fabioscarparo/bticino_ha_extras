@@ -1509,6 +1509,9 @@ dialog[open]::backdrop { opacity: 1; }
    entrance, and the one that rings selects itself. */
 [data-layout="kiosk"] {
   position: relative; height: 100%; padding: 0; gap: 0; overflow: hidden;
+  /* a view that hands out no height of its own would leave nothing to see,
+     since everything on this layout is positioned over the picture */
+  min-height: 260px;
   background: var(--bt-screen);
   /* the height is definite here, so the card can be asked about its shape
      and not only its width, which inline-size alone cannot answer */
@@ -1603,11 +1606,7 @@ dialog[open]::backdrop { opacity: 1; }
   display: flex; align-items: center; justify-content: center; height: 56px; --mdc-icon-size: 26px;
 }
 [data-layout="kiosk"] .button .text { display: block; max-width: 100%; }
-/* answering and hanging up are the two that must be found without looking */
-[data-layout="kiosk"] .button.success::before,
-[data-layout="kiosk"] .button.danger::before { width: 72px; height: 72px; }
-[data-layout="kiosk"] .button.success ha-icon,
-[data-layout="kiosk"] .button.danger ha-icon { height: 72px; --mdc-icon-size: 32px; }
+/* answering and hanging up are told apart by colour, so the row stays even */
 
 /* the call controls keep clear of the buttons */
 [data-layout="kiosk"] .stream-controls {
@@ -1828,7 +1827,10 @@ class Bticino100xCard extends HTMLElement {
   }
 
   getGridOptions() {
-    return this._config?.layout === 'device' ? { columns: 12, min_columns: 6 } : { columns: 12, min_columns: 6 };
+    // a call screen is worth the whole width and a definite height; the other
+    // layouts take the height of what is in them, as every other card does
+    if (this._config?.layout === 'kiosk') return { columns: 'full', rows: 6, min_rows: 3, min_columns: 6 };
+    return { columns: 12, min_columns: 6 };
   }
 
   _shouldUpdate(old, hass) {

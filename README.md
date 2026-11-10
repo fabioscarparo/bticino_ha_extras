@@ -169,6 +169,13 @@ colour while it rings, and the tabs float over the top so the entrance that ring
 
 <img src="docs/images/card-100x-kiosk.png" width="860" alt="The kiosk layout: a full-screen call from the gate on a wall tablet">
 
+The name is the use, not a mode Home Assistant has to be in: what the layout needs is a view that
+hands it a height. A **Panel (1 card)** view gives it the whole display, which is what a tablet on
+the wall wants; in a sections view it asks for a full-width slot six rows tall and can be resized
+like any other card. Hiding the header and the sidebar - `kiosk-mode`, Fully Kiosk Browser, View
+Assist - is a separate decision about the page around the card, and the layout does not depend on
+it. Every control stays where it is in the other layouts, free `actions` included.
+
 Buttons for things the integration does not own - a gate on another system, a scene, a script -
 go in `actions`, and appear after the built-in ones:
 
