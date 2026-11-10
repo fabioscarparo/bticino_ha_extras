@@ -534,7 +534,7 @@ function renderState() {
 }
 
 async function boot() {
-  const card = await import("../../dist/bticino-100x-card.js?v=" + Date.now());
+  const card = await import("../../src/bticino-100x-card.js?v=" + Date.now());
   const t = card.t;
   await customElements.whenDefined("bticino-100x-card");
 

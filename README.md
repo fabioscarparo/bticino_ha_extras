@@ -57,7 +57,8 @@ versions are offered straight from HACS: just **Update** and hard-refresh the br
 
 > Only needed if you don't use HACS. HACS is the recommended path and handles updates for you.
 
-Copy `dist/bticino-intercom-card.js` to your `config/www/` directory, then add it as a dashboard resource:
+Copy `dist/bticino-intercom-card.js` to your `config/www/` directory, then add it as a dashboard
+resource. One file carries both cards, so this is done once:
 
 1. Go to **Settings > Dashboards > Resources**
 2. Click **Add Resource**
@@ -270,13 +271,20 @@ Please open issues on the [bticino_intercom](https://github.com/k-the-hidden-her
 
 ## Development
 
-The cards are single self-contained files in `dist/` — there is no build step. `tools/card-demo/`
-runs `bticino-100x-card.js` against a fake intercom, so the doorbell, the door, the light, the
-notification link and a call can be driven without a device. A small regression suite drives the real editor element in a headless DOM
-(happy-dom) to guard against config-editor regressions:
+The cards live in `src/`, one file each, with the WebRTC call they share in `src/shared/webrtc.js`.
+HACS installs a single file per plugin, so `npm run build` bundles both into
+`dist/bticino-intercom-card.js` with esbuild, and that file is committed: it is what HACS reads for
+users who track the default branch rather than a release. CI builds it again and fails if it
+differs, so it can never drift from the source.
+
+`tools/card-demo/` runs the card straight from `src/` against a fake intercom, so the doorbell, the
+door, the light, the notification link and a call can be driven without a device - and without a
+build, since the browser follows the imports itself. A small regression suite drives the real
+editor element in a headless DOM (happy-dom) to guard against config-editor regressions:
 
 ```bash
 npm install
+npm run build
 npm test
 ```
 

@@ -8,8 +8,9 @@ python3 -m http.server 8778
 ```
 
 Then open <http://localhost:8778/tools/card-demo/> from the repository root. The page imports the
-real card file from `dist/`, with a changing query string, so an
-edit shows up on reload.
+real card file from `src/`, with a changing query string, so an edit shows up
+on reload - no build in between, because the browser follows the card's own
+imports.
 
 ## What it simulates
 
