@@ -39,13 +39,16 @@ body {
   color: var(--primary-text-color); font-family: var(--ha-font-family-body);
   display: grid; grid-template-columns: minmax(320px, 1fr) 300px; gap: 20px; align-items: start;
 }
-@media (max-width: 760px) { body { grid-template-columns: 1fr; } }
+@media (max-width: 760px) {
+  body { grid-template-columns: 1fr; }
+  .cards, .panel, .kioskrow { grid-column: 1; grid-row: auto; }
+}
 h2 { font-size: 13px; font-weight: 500; color: var(--secondary-text-color); margin: 18px 0 8px; }
 h2:first-of-type { margin-top: 0; }
-.cards { min-width: 0; }
+.cards { grid-column: 1; grid-row: 1; min-width: 0; }
 .cards > div { max-width: 460px; }
 .panel {
-  position: sticky; top: 20px; background: var(--card-background-color);
+  grid-column: 2; grid-row: 1 / -1; position: sticky; top: 20px; align-self: start; background: var(--card-background-color);
   border: 1px solid var(--divider-color); border-radius: 12px; padding: 14px;
   display: flex; flex-direction: column; gap: 10px;
 }
@@ -68,6 +71,21 @@ button.sim.go { border-color: var(--primary-color); color: var(--primary-color);
   padding: 0;
 }
 .swatch.on { border-color: var(--primary-text-color); }
+/* ?shot= leaves one card on the page, at its own size, for a screenshot */
+body.shot { display: block; }
+body.shot .panel, body.shot h2, body.shot .toasts { display: none; }
+body.shot .cards > div, body.shot .kioskrow { display: none; }
+body.shot .cards > div.shot-on, body.shot .kioskrow.shot-on { display: block; }
+body.shot.shot-kiosk { padding: 0; background: transparent; }
+/* a wall tablet, drawn at its real pixel size and scaled to fit the page */
+.kioskrow { grid-column: 1; grid-row: 2; min-width: 0; }
+.kioskrow h2 { margin-top: 0; }
+.kiosk-wrap { overflow: hidden; }
+.kiosk-frame {
+  transform-origin: top left; overflow: hidden;
+  border: 1px solid var(--divider-color); border-radius: 10px;
+  background: var(--primary-background-color);
+}
 .log {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; line-height: 1.5;
   background: var(--secondary-background-color); border-radius: 8px; padding: 8px;
@@ -104,6 +122,7 @@ button.sim.go { border-color: var(--primary-color); color: var(--primary-color);
   </div>
   <div class="row">
     <button class="sim" id="btn-units">One entrance only</button>
+    <button class="sim" id="btn-kiosk">Kiosk: upright</button>
   </div>
   <div class="row">
     <button class="sim" id="btn-answer">Answer at the monitor</button>
@@ -129,6 +148,11 @@ button.sim.go { border-color: var(--primary-color); color: var(--primary-color);
   </div>
   <h3>Log</h3>
   <div class="log" id="log"></div>
+</div>
+
+<div class="kioskrow">
+  <h2 id="kiosk-title">kiosk - wall tablet, 960x480</h2>
+  <div class="kiosk-wrap"><div class="kiosk-frame" id="g6"></div></div>
 </div>
 
 <script type="module">
@@ -187,6 +211,8 @@ const sim = {
   light: false,
   lastCallTs: minutesAgo(38),
   snapshot: shot(205),
+  frontShot: shot(205),
+  gateShot: shot(120),
   // a log long enough to need scrolling in the dialog
   calls: Array.from({ length: 16 }, (_, i) => ({
     event_id: `h${i}`,
@@ -220,6 +246,8 @@ function ring(which = MODULE_FRONT) {
   sim.ringing = true;
   sim.ringingModule = which;
   sim.snapshot = shot(hue);
+  if (which === MODULE_GATE) sim.gateShot = sim.snapshot;
+  else sim.frontShot = sim.snapshot;
   sim.lastCallTs = Math.floor(Date.now() / 1000);
   sim.open = {
     event_id: `c${Date.now()}`, module_name: which === MODULE_GATE ? GATE : MODULE, timestamp: sim.lastCallTs,
@@ -313,9 +341,11 @@ function buildStates() {
     put("camera.bticino_last_event_snapshot", "idle",
       { friendly_name: "Last Event Snapshot", supported_features: 0, entity_picture: sim.snapshot,
         event_time_iso: new Date(sim.lastCallTs * 1000).toISOString() }),
-    put("camera.bticino_ingresso", "idle", { friendly_name: MODULE, supported_features: 2, ...mod(MODULE_FRONT) }),
+    put("camera.bticino_ingresso", "idle",
+      { friendly_name: MODULE, supported_features: 2, entity_picture: sim.frontShot, ...mod(MODULE_FRONT) }),
     ...(sim.twoUnits
-      ? [put("camera.bticino_cancello", "idle", { friendly_name: GATE, supported_features: 2, ...mod(MODULE_GATE) })]
+      ? [put("camera.bticino_cancello", "idle",
+          { friendly_name: GATE, supported_features: 2, entity_picture: sim.gateShot, ...mod(MODULE_GATE) })]
       : []),
     put("camera.bticino_call_home", "idle", { friendly_name: "Call Home", supported_features: 2, icon: "mdi:phone-classic" }),
     put("sensor.bticino_last_call_timestamp", new Date(sim.lastCallTs * 1000).toISOString(),
@@ -455,6 +485,21 @@ class FakeSession {
 const cards = [];
 const CARD_COLOURS = ["blue", "indigo", "purple", "pink", "red", "deep-orange", "amber", "green", "teal"];
 let colour = "blue";
+let kioskLandscape = true;
+
+/** Draw the tablet at its real size, then scale it down to the column. */
+function fitKiosk() {
+  const frame = document.getElementById("g6");
+  if (!frame) return;
+  const w = kioskLandscape ? 960 : 480;
+  const h = kioskLandscape ? 480 : 800;
+  frame.style.width = `${w}px`;
+  frame.style.height = `${h}px`;
+  const available = frame.parentElement.clientWidth;
+  const scale = Math.min(1, available / w);
+  frame.style.transform = `scale(${scale})`;
+  frame.parentElement.style.height = `${h * scale}px`;
+}
 
 /** What the phone does: open the dashboard with ?answer=<camera>. */
 const NOTIFICATION_KEY = "bt-sim-notification";
@@ -550,6 +595,19 @@ async function boot() {
   add("g2", { device_id: DEVICE, layout: "panel", device_size: 220 });
   add("g3", { device_id: DEVICE, layout: "device" });
   add("g4", { device_id: DEVICE, layout: "compact" });
+  add("g6", { device_id: DEVICE, layout: "kiosk" });
+  fitKiosk();
+  window.addEventListener("resize", fitKiosk);
+  document.getElementById("btn-kiosk").onclick = () => {
+    kioskLandscape = !kioskLandscape;
+    document.getElementById("btn-kiosk").textContent = kioskLandscape ? "Kiosk: upright" : "Kiosk: landscape";
+    document.getElementById("kiosk-title").textContent = kioskLandscape
+      ? "kiosk - wall tablet, 960x480"
+      : "kiosk - wall tablet, 480x800";
+    fitKiosk();
+    log(`kiosk ${kioskLandscape ? "landscape" : "upright"}`);
+  };
+
   add("g5", {
     device_id: DEVICE,
     actions: [{ entity: "lock.driveway_gate", name: "Driveway", icon: "mdi:gate" }],
@@ -602,6 +660,31 @@ async function boot() {
     openFromNotification("camera.bticino_ingresso");
 
   log("simulator ready");
+
+  // A screenshot rig as much as a simulator: ?shot=<card> leaves that card
+  // alone on the page, and the other parameters put it in the state wanted.
+  // ?shot=kiosk&ring=gate is the wall tablet taking a call from the gate.
+  const query = new URLSearchParams(location.search);
+  const wanted = query.get("shot");
+  if (wanted) {
+    const kiosk = wanted === "kiosk";
+    const host = document.getElementById(kiosk ? "g6" : wanted);
+    document.body.classList.add("shot");
+    if (kiosk) document.body.classList.add("shot-kiosk");
+    (kiosk ? document.querySelector(".kioskrow") : host)?.classList.add("shot-on");
+    if (query.get("upright") !== null) document.getElementById("btn-kiosk").click();
+    fitKiosk();
+    if (query.get("dark") !== null) setTheme("dark");
+    const ringAt = query.get("ring");
+    if (ringAt) ring(ringAt === "gate" ? MODULE_GATE : MODULE_FRONT);
+    if (query.get("answer") !== null) {
+      const card = host.querySelector("bticino-100x-card");
+      const answer = [...card.shadowRoot.querySelectorAll(".button")].find((b) =>
+        ["Answer", "Live"].includes(b.querySelector(".text")?.textContent),
+      );
+      if (answer) answer.click();
+    }
+  }
 
   // Arriving from the notification: the bell is ringing and the card, finding
   // ?answer= in the address, picks the call up without anyone pressing a thing.
