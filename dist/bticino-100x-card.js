@@ -1502,12 +1502,14 @@ dialog[open]::backdrop { opacity: 1; }
 [data-layout="device"] .device-caption { display: none; }
 [data-layout="compact"] .device-wrap { display: none; }
 
-/* --- kiosk: a wall tablet or a View Assist screen, landscape ------------
-   The card fills whatever it is given and never scrolls: the picture takes
-   the room, the two call actions are big enough to hit while walking past,
-   and everything that reads rather than acts is left out. */
+/* --- kiosk: a wall tablet or a View Assist screen ----------------------
+   Nothing else shares that screen, so the picture takes all of it and the
+   controls float over it the way a phone call does: the entrance and what
+   it is doing at the top, round buttons along the bottom. One tab per
+   entrance, and the one that rings selects itself. */
 [data-layout="kiosk"] {
-  height: 100%; gap: var(--ha-space-2, 8px);
+  position: relative; height: 100%; padding: 0; gap: 0; overflow: hidden;
+  background: var(--bt-screen);
   /* the height is definite here, so the card can be asked about its shape
      and not only its width, which inline-size alone cannot answer */
   container-type: size;
@@ -1515,40 +1517,119 @@ dialog[open]::backdrop { opacity: 1; }
 [data-layout="kiosk"] .device-wrap,
 [data-layout="kiosk"] .badges,
 [data-layout="kiosk"] .expander,
-[data-layout="kiosk"] .history { display: none; }
-[data-layout="kiosk"] .head { min-height: 0; }
-[data-layout="kiosk"] .primary { font-size: var(--ha-font-size-l, 16px); line-height: 22px; }
-[data-layout="kiosk"] .body {
-  flex: 1 1 auto; min-height: 0; flex-direction: row; align-items: stretch;
-  gap: var(--ha-space-3, 12px);
-}
+[data-layout="kiosk"] .history,
+[data-layout="kiosk"] .stream-label,
+[data-layout="kiosk"] .live-dot,
+[data-layout="kiosk"] .tile-icon { display: none; }
+
+/* the picture is the screen */
+[data-layout="kiosk"] .body { position: absolute; inset: 0; display: block; }
 [data-layout="kiosk"] .preview,
 [data-layout="kiosk"] .stream {
-  flex: 1 1 auto; min-width: 0; min-height: 0; max-width: none; align-self: stretch;
+  position: absolute; inset: 0; width: 100%; max-width: none; border-radius: 0;
+  /* the centring these carry elsewhere would shrink them to their content
+     here, where the content is the one thing that has to fill the screen */
+  align-self: stretch;
 }
-[data-layout="kiosk"] .preview-img {
-  width: 100%; height: 100%; object-fit: contain; background: var(--bt-screen);
-}
+[data-layout="kiosk"] .preview-img,
 [data-layout="kiosk"] .stream-video {
-  /* the box is given, so the picture fits inside it instead of sizing it */
-  width: 100%; height: 100%; aspect-ratio: auto; object-fit: contain;
+  width: 100%; height: 100%; aspect-ratio: auto; object-fit: cover;
 }
-[data-layout="kiosk"] .content { flex: 0 0 min(38%, 260px); justify-content: center; min-width: 0; }
-[data-layout="kiosk"] .features { flex-direction: column; gap: 10px; }
-/* a column of buttons must keep its height: flex-basis 0 would collapse it */
+[data-layout="kiosk"] .stream.audio { min-height: 0; border: none; background: var(--bt-screen); }
+[data-layout="kiosk"] .stream.audio .stream-overlay {
+  position: absolute; color: var(--text-primary-color, #fff); --mdc-icon-size: 48px;
+}
+
+/* who is at the door, over a scrim that keeps it legible on any picture */
+[data-layout="kiosk"] .head {
+  position: absolute; inset-inline: 0; top: 0; z-index: 3; border-radius: 0;
+  flex-direction: column; align-items: center; gap: 2px; text-align: center;
+  padding: var(--ha-space-5, 20px) var(--ha-space-4, 16px) var(--ha-space-10, 40px);
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.65), rgba(0, 0, 0, 0));
+}
+[data-layout="kiosk"]:has(.tabs:not([hidden])) .head { padding-top: 60px; }
+/* the scrim reaches down over the picture, so it must not take taps with it */
+[data-layout="kiosk"] .head { pointer-events: none; }
+[data-layout="kiosk"] .tile-info { flex: none; align-items: center; max-width: 100%; }
+[data-layout="kiosk"] .primary {
+  font-size: var(--ha-font-size-m, 14px); font-weight: var(--ha-font-weight-normal, 400);
+  color: rgba(255, 255, 255, 0.75);
+}
+[data-layout="kiosk"] .secondary {
+  font-size: var(--ha-font-size-2xl, 24px); line-height: 30px; letter-spacing: 0;
+  font-weight: var(--ha-font-weight-medium, 500); color: var(--text-primary-color, #fff);
+}
+
+/* the tabs float rather than take a row of their own */
+[data-layout="kiosk"] .tabs {
+  position: absolute; z-index: 4; top: var(--ha-space-3, 12px); left: 50%;
+  transform: translateX(-50%); width: auto; max-width: calc(100% - 24px); height: 36px;
+  backdrop-filter: blur(8px);
+}
+[data-layout="kiosk"] .tabs::before { background: rgba(0, 0, 0, 0.45); opacity: 1; }
+[data-layout="kiosk"] .tab { flex: 0 0 auto; color: rgba(255, 255, 255, 0.8); }
+[data-layout="kiosk"] .tab.selected { color: var(--text-primary-color, #fff); }
+[data-layout="kiosk"] .tab span { padding: 0 12px; }
+
+/* the actions sit on the picture, not under it */
+[data-layout="kiosk"] .content {
+  position: absolute; inset-inline: 0; bottom: 0; z-index: 3;
+  padding: var(--ha-space-10, 40px) var(--ha-space-4, 16px) var(--ha-space-5, 20px);
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.7), rgba(0, 0, 0, 0));
+}
+[data-layout="kiosk"] .features {
+  justify-content: center; align-items: flex-end; flex-wrap: wrap;
+  gap: var(--ha-space-5, 20px);
+}
 [data-layout="kiosk"] .button {
-  flex: 0 0 60px; height: 60px; font-size: var(--ha-font-size-l, 16px); --mdc-icon-size: 26px;
+  flex: 0 0 auto; width: 84px; height: auto; padding: 0; gap: 6px; border-radius: 0;
+  flex-direction: column; color: var(--text-primary-color, #fff);
+  font-size: var(--ha-font-size-s, 12px); font-weight: var(--ha-font-weight-medium, 500);
 }
-[data-layout="kiosk"] .button .text { display: block; }
-/* upright screens put the actions under the picture instead of beside it */
-@container (max-aspect-ratio: 1/1) {
-  [data-layout="kiosk"] .body { flex-direction: column; }
-  [data-layout="kiosk"] .content { flex: 0 0 auto; }
-  [data-layout="kiosk"] .features { flex-direction: row; }
-  /* across a narrow screen there is no room for words: the icons are large
-     and the colours carry answer and reject on their own */
-  [data-layout="kiosk"] .button { flex: 1 1 0; }
-  [data-layout="kiosk"] .button .text { display: none; }
+/* the background follows the icon alone, so the label can sit under the circle */
+[data-layout="kiosk"] .button::before {
+  inset: auto; top: 0; left: 50%; transform: translateX(-50%);
+  width: 56px; height: 56px; border-radius: var(--ha-border-radius-circle, 50%);
+  background: rgba(255, 255, 255, 0.18); opacity: 1; backdrop-filter: blur(8px);
+}
+[data-layout="kiosk"] .button:hover:not(:disabled)::before { background: rgba(255, 255, 255, 0.32); opacity: 1; }
+[data-layout="kiosk"] .button.tonal::before { background: rgba(255, 255, 255, 0.28); }
+[data-layout="kiosk"] .button.primary::before { background: var(--tile-color); }
+[data-layout="kiosk"] .button.success::before { background: var(--success-color, #43a047); }
+[data-layout="kiosk"] .button.danger::before { background: var(--error-color, #db4437); }
+[data-layout="kiosk"] .button:disabled { color: rgba(255, 255, 255, 0.5); }
+[data-layout="kiosk"] .button:disabled::before { background: rgba(255, 255, 255, 0.1); }
+[data-layout="kiosk"] .button ha-icon {
+  display: flex; align-items: center; justify-content: center; height: 56px; --mdc-icon-size: 26px;
+}
+[data-layout="kiosk"] .button .text { display: block; max-width: 100%; }
+/* answering and hanging up are the two that must be found without looking */
+[data-layout="kiosk"] .button.success::before,
+[data-layout="kiosk"] .button.danger::before { width: 72px; height: 72px; }
+[data-layout="kiosk"] .button.success ha-icon,
+[data-layout="kiosk"] .button.danger ha-icon { height: 72px; --mdc-icon-size: 32px; }
+
+/* the call controls keep clear of the buttons */
+[data-layout="kiosk"] .stream-controls {
+  z-index: 4; bottom: auto; top: var(--ha-space-3, 12px); inset-inline-end: var(--ha-space-3, 12px);
+}
+[data-layout="kiosk"] .stream-controls .icon-button { width: 48px; height: 48px; --mdc-icon-size: 24px; }
+[data-layout="kiosk"] .stream-controls .icon-button::before { background: rgba(0, 0, 0, 0.45); opacity: 1; }
+
+/* a ring around the whole screen, seen from across the room */
+[data-layout="kiosk"].ringing::after {
+  content: ""; position: absolute; inset: 0; z-index: 5; pointer-events: none;
+  border: 3px solid var(--tile-color); animation: bt-glow 1.8s ease-in-out infinite;
+}
+@keyframes bt-glow {
+  0%, 100% { box-shadow: inset 0 0 0 0 color-mix(in srgb, var(--tile-color) 40%, transparent); }
+  50% { box-shadow: inset 0 0 30px 6px color-mix(in srgb, var(--tile-color) 40%, transparent); }
+}
+/* a narrow screen has less room between the buttons */
+@container (max-width: 420px) {
+  [data-layout="kiosk"] .features { gap: var(--ha-space-2, 8px); }
+  [data-layout="kiosk"] .button { width: 72px; }
+  [data-layout="kiosk"] .secondary { font-size: var(--ha-font-size-xl, 20px); line-height: 26px; }
 }
 [data-layout="device"] .bt-key[role="button"] { cursor: pointer; }
 [data-layout="device"] .bt-key[role="button"]:hover .bt-glyph { fill: var(--tile-color); }
@@ -1688,6 +1769,7 @@ class Bticino100xCard extends HTMLElement {
     this._expanded = false;
     this._stream = null;
     this._session = null;
+    this._answeredRing = false;
     this._soundOn = true;
     this._selectedUnit = null;
   }
@@ -2005,10 +2087,16 @@ class Bticino100xCard extends HTMLElement {
     const hass = this._hass;
     const found = this._found;
     const ringingUnit = found.units.find((unit) => unit.doorbell && hass.states[unit.doorbell]?.state === 'on');
-    const ringing = !!ringingUnit || found.doorbells.some((id) => hass.states[id]?.state === 'on');
-    const talking = !ringing && hass.states[found.busy]?.state === 'on';
+    const atTheDoor = !!ringingUnit || found.doorbells.some((id) => hass.states[id]?.state === 'on');
+    // the doorbell sensor stays on for its own 30 seconds, so what ends the
+    // ringing is picking the call up here, not the sensor going quiet. Merely
+    // watching the entrance when the bell goes is not an answer: that call is
+    // still waiting, and the card has to keep offering to take it.
+    const onTheRingingCamera = !!this._stream && !!ringingUnit && this._stream.entityId === ringingUnit.camera;
+    const ringing = atTheDoor && !(this._stream && (this._answeredRing || onTheRingingCamera));
+    const talking = !ringing && (!!this._stream || hass.states[found.busy]?.state === 'on');
     const reachable = found.all.some((id) => hass.states[id] && hass.states[id].state !== 'unavailable');
-    return { ringing, talking, reachable, active: ringing || talking, ringingUnit: ringingUnit || null };
+    return { ringing, talking, reachable, active: ringing || talking, atTheDoor, ringingUnit: ringingUnit || null };
   }
 
   /**
@@ -2018,6 +2106,8 @@ class Bticino100xCard extends HTMLElement {
    */
   _activeUnit(status) {
     const units = this._found.units;
+    // a call still waiting at the door comes before a view opened by hand
+    if (status.ringing && status.ringingUnit) return status.ringingUnit;
     if (this._stream) {
       const streaming = units.find((unit) => unit.camera === this._stream.entityId);
       if (streaming) return streaming;
@@ -2067,6 +2157,8 @@ class Bticino100xCard extends HTMLElement {
     const nodes = this._root;
     const config = this._config;
     const status = this._status();
+    // the call that was answered here is over: the next ring is a new one
+    if (!status.atTheDoor) this._answeredRing = false;
 
     const classes = ['card'];
     if (status.ringing) classes.push('ringing');
@@ -2101,8 +2193,12 @@ class Bticino100xCard extends HTMLElement {
         : status.talking
           ? t(hass, 'talking')
           : t(hass, 'idle');
-    // with two entrances, which one rang matters more than when the last call was
-    const unitName = status.ringing && this._found.units.length > 1 ? status.ringingUnit?.name : null;
+    // with two entrances, which one is on the line matters more than when the
+    // last call was; only the two we can name for certain are written here
+    const onTheLine = status.ringing
+      ? status.ringingUnit
+      : this._found.units.find((unit) => unit.camera && unit.camera === this._stream?.entityId) || null;
+    const unitName = this._found.units.length > 1 ? onTheLine?.name : null;
     nodes.secondary.textContent = unitName
       ? `${stateText} - ${unitName}`
       : lastCall
@@ -2150,18 +2246,23 @@ class Bticino100xCard extends HTMLElement {
    * needed, so while it rings the picture takes the drawing's place.
    */
   _syncRingingPreview(status) {
+    const hass = this._hass;
     const nodes = this._root;
-    const picture = this._hass.states[this._found.snapshot]?.attributes.entity_picture;
+    const unit = this._activeUnit(status);
+    // the chosen entrance carries its own last frame; the event snapshot is
+    // the whole home's, so it only stands in when that entrance has none
+    const picture =
+      hass.states[unit?.camera]?.attributes.entity_picture ||
+      hass.states[this._found.snapshot]?.attributes.entity_picture;
     // a kiosk has nothing else to put on screen, so it keeps the last frame up
     const wanted = status.ringing || this._config.layout === 'kiosk';
     const show = wanted && !this._stream && !!picture;
     nodes.preview.hidden = !show;
     if (!show) return;
     if (nodes.previewImg.getAttribute('src') !== picture) nodes.previewImg.setAttribute('src', picture);
-    const unit = this._activeUnit(status);
     nodes.previewIcon.setAttribute('icon', status.ringing ? 'mdi:bell-ring' : 'mdi:cctv');
-    nodes.previewText.textContent = unit?.name || t(this._hass, status.ringing ? 'ringing' : 'standby');
-    nodes.preview.setAttribute('aria-label', `${t(this._hass, 'answer')} - ${unit?.name || ''}`.trim());
+    nodes.previewText.textContent = unit?.name || t(hass, status.ringing ? 'ringing' : 'standby');
+    nodes.preview.setAttribute('aria-label', `${t(hass, 'answer')} - ${unit?.name || ''}`.trim());
   }
 
   _syncScreen(lastCall, status) {
@@ -2377,7 +2478,7 @@ class Bticino100xCard extends HTMLElement {
 
     if (found.liveCameras.length || found.snapshot) {
       const target = this._activeCamera(status);
-      const watching = this._stream?.mode === 'video';
+      const watching = this._stream?.mode === 'video' && this._stream.entityId === target;
       // the same call either way, but while it rings answering is the point
       let liveIcon = 'mdi:video-outline';
       let liveText = t(hass, 'live');
@@ -2385,7 +2486,8 @@ class Bticino100xCard extends HTMLElement {
       if (watching) {
         liveIcon = 'mdi:phone-hangup';
         liveText = t(hass, 'hang_up');
-        liveVariant = 'tonal';
+        // on a call screen, ending the call is the red button it is on a phone
+        liveVariant = this._config.layout === 'kiosk' ? 'danger' : 'tonal';
       } else if (status.ringing) {
         liveIcon = 'mdi:phone';
         liveText = t(hass, 'answer');
@@ -2402,14 +2504,15 @@ class Bticino100xCard extends HTMLElement {
       });
     }
 
-    // Dialling the indoor monitor makes no sense while the door is ringing.
-    if (found.callHome && !status.ringing && !status.talking) {
-      const calling = this._stream?.mode === 'audio';
+    // Dialling the indoor monitor makes no sense while the door is ringing,
+    // but a call already under way keeps its button: that is how it ends.
+    const calling = this._stream?.mode === 'audio';
+    if (found.callHome && (calling || (!status.ringing && !status.talking))) {
       buttons.push({
         key: 'call-home',
         icon: calling ? 'mdi:phone-hangup' : 'mdi:home-outline',
         text: t(hass, calling ? 'hang_up' : 'call_home'),
-        variant: calling ? 'tonal' : '',
+        variant: calling ? (this._config.layout === 'kiosk' ? 'danger' : 'tonal') : '',
         disabled: !status.reachable,
         action: () => this._toggleStream(found.callHome, 'audio'),
       });
@@ -2507,6 +2610,12 @@ class Bticino100xCard extends HTMLElement {
       this._stopStream();
       return;
     }
+    // answering is opening the entrance that rings: looking at the other one
+    // while the bell goes leaves that call where it is, still waiting
+    const status = this._status();
+    if (status.ringing && (!status.ringingUnit?.camera || status.ringingUnit.camera === entityId)) {
+      this._answeredRing = true;
+    }
     this._startStream(entityId, mode);
   }
 
@@ -2531,6 +2640,7 @@ class Bticino100xCard extends HTMLElement {
   _stopStream() {
     this._stopSession();
     this._stream = null;
+    this._answeredRing = false;
     if (this._root) this._sync();
   }
 

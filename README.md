@@ -121,10 +121,11 @@ intercoms:
 ### BTicino Classe 100X Card
 
 A second card, `custom:bticino-100x-card`. It is not a replacement for the one above: that card is
-built around the call, full bleed, and is the right thing on a wall tablet. This one is built to
-sit on a normal dashboard among native cards, so every colour, radius, font and spacing comes from
-Home Assistant's own tokens and it follows light, dark and custom themes, the user's language and
-the sections grid without configuration.
+built around the call, full bleed. This one is built to sit on a normal dashboard among native
+cards, so every colour, radius, font and spacing comes from Home Assistant's own tokens and it
+follows light, dark and custom themes, the user's language and the sections grid without
+configuration - and `layout: kiosk` gives it a full-screen call screen of its own for a wall
+tablet.
 
 <img src="docs/images/card-100x-idle.png" width="420" alt="The card at rest"> <img src="docs/images/card-100x-ringing.png" width="420" alt="The card while the intercom rings">
 
@@ -144,7 +145,7 @@ the card working. Everything else is optional:
 | Option | Default | Description |
 |---|---|---|
 | `device_id` | - | The BTicino device, picked in the visual editor |
-| `layout` | `compact` | `compact` (no drawing), `panel` (a small Classe 100X above the card) or `device` (the drawing leads and its own keys are the controls). The drawing is a 100X, and the device registry reports the bridge for the 100X and the 300X alike, so it is opt-in |
+| `layout` | `compact` | `compact` (no drawing), `panel` (a small Classe 100X above the card), `device` (the drawing leads and its own keys are the controls) or `kiosk` (a full-screen call screen for a wall tablet). The drawing is a 100X, and the device registry reports the bridge for the 100X and the 300X alike, so it is opt-in |
 | `device_size` | 140 / 260 | Width of the drawing in pixels, 80 to 320 |
 | `name`, `icon` | from the device | Title and header icon |
 | `color` | `blue` | Accent while ringing or in a call |
@@ -158,6 +159,15 @@ and shows a tab per entrance. A call takes over the view while it lasts - the ta
 that is ringing is marked with a dot and selected on its own - and the choice made by hand comes
 back once the call is over. **Answer** always opens the one that rang, and the header says which
 entrance it is.
+
+**On a wall tablet.** `layout: kiosk` turns the card into the screen a phone shows while it rings:
+the entrance fills it, the name and what it is doing sit over the top, and the actions are round
+buttons along the bottom - green to answer, red to hang up. It takes the height it is given, so in
+a panel view or on a View Assist screen it fills the display, landscape or upright; the picture
+becomes live video as soon as the call is answered, the whole screen is ringed in the accent
+colour while it rings, and the tabs float over the top so the entrance that rings selects itself.
+
+<img src="docs/images/card-100x-kiosk.png" width="860" alt="The kiosk layout: a full-screen call from the gate on a wall tablet">
 
 Buttons for things the integration does not own - a gate on another system, a scene, a script -
 go in `actions`, and appear after the built-in ones:
