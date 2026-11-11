@@ -10,10 +10,10 @@
  */
 
 import { BticinoCallSession, CALL_STATE, isChromium } from './shared/webrtc.js';
+import { VERSION } from './shared/version.js';
 
 const CARD_TYPE = 'bticino-100x-card';
 const EDITOR_TYPE = 'bticino-100x-card-editor';
-const VERSION = '1.0.0';
 const DOMAIN = 'bticino_intercom';
 
 /* ------------------------------------------------------------------ strings */
@@ -1156,7 +1156,8 @@ dialog[open]::backdrop { opacity: 1; }
   position: relative; height: 100%; padding: 0; gap: 0; overflow: hidden;
   /* a view that hands out no height of its own would leave nothing to see,
      since everything on this layout is positioned over the picture */
-  min-height: 260px;
+  /* the same as the four rows getGridOptions allows as a minimum, 4 x 56 + 3 x 8 */
+  min-height: 248px;
   background: var(--bt-screen);
   /* the height is definite here, so the card can be asked about its shape
      and not only its width, which inline-size alone cannot answer */
@@ -1253,8 +1254,14 @@ dialog[open]::backdrop { opacity: 1; }
 [data-layout="kiosk"] .button .text { display: block; max-width: 100%; }
 /* answering and hanging up are told apart by colour, so the row stays even */
 
-/* the call's own controls are in the row below, so the corner stays clear */
-[data-layout="kiosk"] .stream-controls { display: none; }
+/* the call's own controls are in the row below, so the corner stays clear;
+   without the row they stay on the picture, out of the way of the header */
+[data-layout="kiosk"].controls .stream-controls { display: none; }
+[data-layout="kiosk"]:not(.controls) .stream-controls {
+  z-index: 4; bottom: auto; top: var(--ha-space-3, 12px); inset-inline-end: var(--ha-space-3, 12px);
+}
+[data-layout="kiosk"]:not(.controls) .stream-controls .icon-button { width: 48px; height: 48px; --mdc-icon-size: 24px; }
+[data-layout="kiosk"]:not(.controls) .stream-controls .icon-button::before { background: rgba(0, 0, 0, 0.45); opacity: 1; }
 /* a muted microphone or speaker turns solid, the way a phone shows mute */
 [data-layout="kiosk"] .button.muted::before { background: var(--text-primary-color, #fff); }
 [data-layout="kiosk"] .button.muted ha-icon { color: var(--bt-screen); }
@@ -1473,7 +1480,7 @@ class Bticino100xCard extends HTMLElement {
   getGridOptions() {
     // a call screen is worth the whole width and a definite height; the other
     // layouts take the height of what is in them, as every other card does
-    if (this._config?.layout === 'kiosk') return { columns: 'full', rows: 6, min_rows: 3, min_columns: 6 };
+    if (this._config?.layout === 'kiosk') return { columns: 'full', rows: 6, min_rows: 4, min_columns: 6 };
     return { columns: 12, min_columns: 6 };
   }
 
@@ -1807,6 +1814,7 @@ class Bticino100xCard extends HTMLElement {
     if (!status.atTheDoor) this._answeredRing = false;
 
     const classes = ['card'];
+    if (config.show_controls) classes.push('controls');
     if (status.ringing) classes.push('ringing');
     if (status.talking) classes.push('talking');
     if (!status.reachable) classes.push('offline');
@@ -2209,7 +2217,9 @@ class Bticino100xCard extends HTMLElement {
           action: () => this._toggleSound(),
         });
       }
-      const hangUp = buttons.findIndex((b) => b.icon === 'mdi:phone-hangup' && b.key !== 'reject');
+      // the button that ends this call, known by what it is rather than by its
+      // icon, which a free action is just as entitled to use
+      const hangUp = buttons.findIndex((b) => b.key === (this._stream.mode === 'audio' ? 'call-home' : 'live'));
       buttons.splice(hangUp < 0 ? buttons.length : hangUp, 0, ...controls);
     }
 
@@ -2310,7 +2320,10 @@ class Bticino100xCard extends HTMLElement {
       onState: () => {
         if (this._session === session && this._root) this._syncStream();
       },
-      onNotice: (key) => fireEvent(this, 'hass-notification', { message: t(this._hass, key) }),
+      onNotice: (key) => {
+        // a refusal that lands after the hang-up belongs to a call that is over
+        if (this._session === session) fireEvent(this, 'hass-notification', { message: t(this._hass, key) });
+      },
     });
     this._session = session;
     this._stream = { entityId, mode };

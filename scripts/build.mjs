@@ -12,6 +12,14 @@ import { build } from 'esbuild';
 import { readFile } from 'node:fs/promises';
 
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+const { VERSION } = await import('../src/shared/version.js');
+
+// the cards print their version and the package names the release; a bump
+// made in one place only would ship a file that contradicts itself
+if (VERSION !== pkg.version) {
+  console.error(`src/shared/version.js says ${VERSION}, package.json says ${pkg.version}`);
+  process.exit(1);
+}
 
 await build({
   entryPoints: ['src/index.js'],

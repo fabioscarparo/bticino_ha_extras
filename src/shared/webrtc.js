@@ -10,9 +10,10 @@
  *  - video is offered only to units that have a camera, so a Call Home to the
  *    indoor monitor negotiates audio alone instead of collecting a rejected
  *    m-section;
- *  - signalling runs over its own WebSocket, because camera/webrtc/offer
- *    answers with a stream of events (session, answer, candidate) rather than
- *    a single result.
+ *  - camera/webrtc/offer answers with a stream of events (session, answer,
+ *    candidate) rather than a single result, so it is a subscription on the
+ *    connection the page already has, the way Home Assistant's own player
+ *    sends it.
  *
  * The caller gets a MediaStream, a state and two callbacks: `onState` for what
  * the card draws, `onNotice` for what the user should be told. Everything the
@@ -28,6 +29,10 @@ export const CALL_STATE = {
 };
 
 const DOMAIN = 'bticino_intercom';
+
+const stopTracks = (stream) => {
+  for (const track of stream?.getTracks?.() || []) track.stop();
+};
 
 const SIGNALING_TIMEOUT = 15000;
 const RECONNECT_DELAY = 2000;
@@ -58,10 +63,11 @@ export class BticinoCallSession {
     this.micActive = false;
     this.error = null;
     this._wanted = true;
+    // every connection attempt has a number, so that work still awaiting a
+    // reply from the browser or the server can tell it has been overtaken
+    this._attempt = 0;
     this._reconnects = 0;
-    this._candidateId = 100;
     this._pendingCandidates = [];
-    this._accepted = false;
   }
 
   _set(state, error = null) {
@@ -70,20 +76,35 @@ export class BticinoCallSession {
     this.onState(this);
   }
 
+  /** Whether the attempt that started a piece of work is still the one wanted. */
+  _current(attempt) {
+    return this._wanted && attempt === this._attempt;
+  }
+
   async start() {
     this._audioCtx = new AudioContext();
     // Asking once up front means the first words are not lost to a prompt.
     if (this.autoMic && window.isSecureContext && navigator.mediaDevices?.getUserMedia) {
+      let microphone = null;
       try {
-        this._micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        microphone = await navigator.mediaDevices.getUserMedia({ audio: true });
       } catch {
-        this._micStream = null;
+        microphone = null;
       }
+      // hung up while the browser was asking: the microphone it just handed
+      // over must not stay open behind a card that has gone back to rest
+      if (!this._wanted) {
+        stopTracks(microphone);
+        return;
+      }
+      this._micStream = microphone;
     }
-    await this._connect();
+    if (this._wanted) await this._connect();
   }
 
   async _connect() {
+    this._attempt += 1;
+    const attempt = this._attempt;
     this._set(this._reconnects ? CALL_STATE.RECONNECTING : CALL_STATE.CONNECTING);
     const keepMic = this._micStream;
     this._micStream = null;
@@ -92,6 +113,7 @@ export class BticinoCallSession {
 
     try {
       if (this._audioCtx?.state === 'suspended') await this._audioCtx.resume();
+      if (!this._current(attempt)) return;
       const oscillator = this._audioCtx.createOscillator();
       oscillator.frequency.value = 0;
       const destination = this._audioCtx.createMediaStreamDestination();
@@ -101,10 +123,9 @@ export class BticinoCallSession {
       this._silenceStream = destination.stream;
       this._silenceTrack = this._silenceStream.getAudioTracks()[0];
 
-      this._pc = new RTCPeerConnection({
-        iceServers: await this._iceServers(),
-        rtcpMuxPolicy: 'require',
-      });
+      const iceServers = await this._iceServers();
+      if (!this._current(attempt)) return;
+      this._pc = new RTCPeerConnection({ iceServers, rtcpMuxPolicy: 'require' });
 
       const micTrack = this._micStream?.getAudioTracks()?.[0];
       this._pc.addTransceiver(micTrack || this._silenceTrack, {
@@ -112,10 +133,8 @@ export class BticinoCallSession {
         streams: [this._silenceStream],
       });
       if (this.wantsVideo) this._pc.addTransceiver('video', { direction: 'recvonly' });
-      if (micTrack) {
-        this._micSender = this._pc.getSenders().find((sender) => sender.track?.kind === 'audio');
-        this.micActive = true;
-      }
+      this._micSender = micTrack ? this._pc.getSenders().find((sender) => sender.track?.kind === 'audio') : null;
+      this.micActive = !!micTrack;
 
       this.stream = new MediaStream();
       this._pc.ontrack = (event) => {
@@ -126,7 +145,7 @@ export class BticinoCallSession {
         const state = this._pc?.connectionState;
         if (state === 'connected') {
           this._reconnects = 0;
-          this._accept();
+          this._reportConnected();
           this._set(CALL_STATE.LIVE);
         } else if (this._wanted && ['disconnected', 'failed', 'closed'].includes(state)) {
           this._scheduleReconnect();
@@ -139,15 +158,17 @@ export class BticinoCallSession {
           sdpMLineIndex: event.candidate.sdpMLineIndex,
           sdpMid: event.candidate.sdpMid,
         };
-        if (this._ws?.readyState === WebSocket.OPEN && this._sessionId) this._sendCandidate(candidate);
+        if (this._sessionId) this._sendCandidate(candidate);
         else this._pendingCandidates.push(candidate);
       };
 
       const offer = await this._pc.createOffer();
+      if (!this._current(attempt)) return;
       await this._pc.setLocalDescription(offer);
-      await this._signal(this._pc.localDescription.sdp);
+      if (!this._current(attempt)) return;
+      await this._signal(this._pc.localDescription.sdp, attempt);
     } catch (err) {
-      if (this._wanted) this._set(CALL_STATE.ERROR, err?.message || String(err));
+      if (this._current(attempt)) this._fail(err?.message || String(err));
     }
   }
 
@@ -175,16 +196,15 @@ export class BticinoCallSession {
     }
   }
 
-  _signal(offerSdp) {
+  /**
+   * The offer goes out on the connection the page already has, as Home
+   * Assistant's own player sends it. A socket of its own would have to log in
+   * again with an access token that lasts thirty minutes, and on a kiosk or a
+   * Companion app left open for hours that token has long expired by the
+   * time the bell goes.
+   */
+  _signal(offerSdp, attempt) {
     return new Promise((resolve, reject) => {
-      const token = this.hass.auth?.data?.access_token || this.hass.connection?.options?.auth?.data?.access_token;
-      if (!token) {
-        reject(new Error('no access token'));
-        return;
-      }
-      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const socket = new WebSocket(`${protocol}//${location.host}/api/websocket`);
-      this._ws = socket;
       let settled = false;
       const finish = (err) => {
         if (settled) return;
@@ -194,98 +214,94 @@ export class BticinoCallSession {
         if (err) reject(err);
         else resolve();
       };
-
       this._signalTimer = setTimeout(() => finish(new Error('signaling timeout')), SIGNALING_TIMEOUT);
-      socket.onerror = () => finish(new Error('signaling socket error'));
-      socket.onclose = () => finish(new Error('signaling socket closed'));
-      socket.onmessage = async (event) => {
-        const message = JSON.parse(event.data);
-        if (message.type === 'auth_required') {
-          socket.send(JSON.stringify({ type: 'auth', access_token: token }));
-          return;
-        }
-        if (message.type === 'auth_ok') {
-          socket.send(
-            JSON.stringify({ id: 1, type: 'camera/webrtc/offer', entity_id: this.entityId, offer: offerSdp }),
-          );
-          return;
-        }
-        if (message.type === 'auth_invalid') {
-          finish(new Error('authentication failed'));
-          return;
-        }
-        if (message.type === 'result' && !message.success) {
-          finish(new Error(message.error?.message || 'offer rejected'));
-          return;
-        }
-        if (message.type !== 'event') return;
 
-        const event_ = message.event;
-        if (event_.type === 'session') {
-          this._sessionId = event_.session_id;
-          for (const candidate of this._pendingCandidates) this._sendCandidate(candidate);
-          this._pendingCandidates = [];
-        } else if (event_.type === 'answer') {
-          try {
-            await this._pc.setRemoteDescription({ type: 'answer', sdp: event_.answer });
-            finish();
-          } catch (err) {
-            finish(err);
-          }
-        } else if (event_.type === 'candidate' && event_.candidate) {
-          try {
-            await this._pc.addIceCandidate({
-              candidate: event_.candidate.candidate,
-              sdpMLineIndex: event_.candidate.sdp_m_line_index ?? event_.candidate.sdpMLineIndex ?? 0,
-            });
-          } catch {
-            /* a candidate we cannot use is not fatal */
-          }
-        } else if (event_.type === 'error') {
-          finish(new Error(event_.message || 'signaling error'));
-        }
-      };
+      this.hass.connection
+        .subscribeMessage(
+          (event) => {
+            if (this._current(attempt)) this._onSignal(event, finish);
+          },
+          { type: 'camera/webrtc/offer', entity_id: this.entityId, offer: offerSdp },
+          // should the main connection drop and come back, resubscribing would
+          // send this offer a second time, and the device would give a second
+          // peer slot to a session nobody is reading any more
+          { resubscribe: false },
+        )
+        .then((unsubscribe) => {
+          // the call may have ended while the offer was on its way
+          if (this._current(attempt)) this._unsubscribe = unsubscribe;
+          else this._release(unsubscribe);
+        })
+        .catch((err) => finish(new Error(err?.message || err?.code || 'offer rejected')));
     });
   }
 
+  async _onSignal(event, finish) {
+    if (event.type === 'session') {
+      this._sessionId = event.session_id;
+      for (const candidate of this._pendingCandidates) this._sendCandidate(candidate);
+      this._pendingCandidates = [];
+    } else if (event.type === 'answer') {
+      try {
+        await this._pc.setRemoteDescription({ type: 'answer', sdp: event.answer });
+        finish();
+      } catch (err) {
+        finish(err);
+      }
+    } else if (event.type === 'candidate' && event.candidate) {
+      try {
+        await this._pc.addIceCandidate({
+          candidate: event.candidate.candidate,
+          sdpMLineIndex: event.candidate.sdp_m_line_index ?? event.candidate.sdpMLineIndex ?? 0,
+        });
+      } catch {
+        /* a candidate we cannot use is not fatal */
+      }
+    } else if (event.type === 'error') {
+      finish(new Error(event.message || event.code || 'signaling error'));
+    }
+  }
+
   _sendCandidate(candidate) {
-    this._candidateId += 1;
-    this._ws.send(
-      JSON.stringify({
-        id: this._candidateId,
+    this.hass
+      .callWS({
         type: 'camera/webrtc/candidate',
         entity_id: this.entityId,
         session_id: this._sessionId,
         candidate,
-      }),
-    );
+      })
+      .catch(() => {
+        /* one candidate the server would not take is not the end of the call */
+      });
   }
 
   /**
-   * Answering a ring takes one message more than the handshake: the device
-   * stays silent until the session is told to unmute, and that message is a
-   * toggle, so it has to be sent exactly once per call
-   * (k-the-hidden-hero/bticino_intercom#72).
+   * Tells the integration that this session's media is up.
    *
-   * Only the integration knows whether this session answered a ring or opened
-   * a view nobody was called for, so the card reports the one thing it alone
-   * knows - the peer connection is up - and leaves the decision there. An
-   * integration without the service simply has nothing to unmute.
+   * Answering a ring takes one message more than the handshake: the device
+   * keeps the call muted until the session is told to unmute, and that
+   * message is a toggle (k-the-hidden-hero/bticino_intercom#72). Only the
+   * integration can tell an answered ring from a view nobody was called for,
+   * and only the browser knows when the media is up, so the card reports the
+   * fact - on every connection, reconnects included, each with the session it
+   * belongs to - and the integration decides, once, whether there is
+   * anything to unmute. An integration without the command answers
+   * unknown_command, which only means there is nobody to tell.
    */
-  _accept() {
-    if (this._accepted) return;
-    this._accepted = true;
-    if (!this.hass.services?.[DOMAIN]?.accept_call) return;
-    this.hass.callService(DOMAIN, 'accept_call', { entity_id: this.entityId }).catch(() => {
-      /* the call is up either way; this only decides whether it can talk */
-    });
+  _reportConnected() {
+    if (!this._sessionId) return;
+    this.hass
+      .callWS({ type: `${DOMAIN}/webrtc_connected`, entity_id: this.entityId, session_id: this._sessionId })
+      .catch((err) => {
+        if (err?.code !== 'unknown_command') console.warn('[bticino] webrtc_connected:', err?.message || err);
+      });
   }
 
   _scheduleReconnect() {
     if (!this._wanted || this._reconnectTimer) return;
     this._reconnects += 1;
     if (this._reconnects > this.maxReconnects) {
-      this._set(CALL_STATE.ERROR, 'connection lost');
+      this._fail('connection lost');
       return;
     }
     this._set(CALL_STATE.RECONNECTING);
@@ -298,38 +314,58 @@ export class BticinoCallSession {
   /** Swap the silence the device needs for the real microphone, and back. */
   async setMic(on) {
     if (on === this.micActive) return;
-    if (on) {
-      if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
-        this.onNotice('mic_insecure');
-        return;
-      }
-      try {
-        if (this._audioCtx?.state === 'suspended') await this._audioCtx.resume();
-        this._micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const track = this._micStream.getAudioTracks()[0];
-        const sender = this._pc?.getSenders()?.find((item) => item.track?.kind === 'audio');
-        if (sender) {
-          await sender.replaceTrack(track);
-          this._micSender = sender;
-        }
-        this.micActive = true;
-      } catch {
-        // a denial is silent otherwise, and the user keeps pressing the button
-        this.micActive = false;
-        this.onNotice('mic_denied');
-      }
-    } else {
+    if (!on) {
       if (this._micSender && this._silenceTrack) await this._micSender.replaceTrack(this._silenceTrack);
       this._stopMicStream();
       this.micActive = false;
+      this.onState(this);
+      return;
+    }
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      this.onNotice('mic_insecure');
+      return;
+    }
+    const attempt = this._attempt;
+    let microphone = null;
+    try {
+      if (this._audioCtx?.state === 'suspended') await this._audioCtx.resume();
+      microphone = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // hung up, or reconnected, while the browser was asking: this call has
+      // no sender left to give the microphone to
+      const sender = this._current(attempt)
+        ? this._pc?.getSenders()?.find((item) => item.track?.kind === 'audio')
+        : null;
+      if (!sender) {
+        stopTracks(microphone);
+        return;
+      }
+      await sender.replaceTrack(microphone.getAudioTracks()[0]);
+      this._micStream = microphone;
+      this._micSender = sender;
+      this.micActive = true;
+    } catch {
+      stopTracks(microphone);
+      if (!this._current(attempt)) return;
+      // a denial is silent otherwise, and the user keeps pressing the button
+      this.micActive = false;
+      this.onNotice('mic_denied');
     }
     this.onState(this);
   }
 
   _stopMicStream() {
-    if (!this._micStream) return;
-    for (const track of this._micStream.getTracks()) track.stop();
+    stopTracks(this._micStream);
     this._micStream = null;
+  }
+
+  /** Ends a subscription, which is what hands the device its peer slot back. */
+  _release(unsubscribe) {
+    if (!unsubscribe) return;
+    try {
+      Promise.resolve(unsubscribe()).catch(() => {});
+    } catch {
+      /* the connection is gone already, and the session went with it */
+    }
   }
 
   _closeConnection() {
@@ -349,17 +385,9 @@ export class BticinoCallSession {
       }
       this._pc = null;
     }
-    if (this._ws) {
-      this._ws.onmessage = null;
-      this._ws.onerror = null;
-      this._ws.onclose = null;
-      try {
-        this._ws.close();
-      } catch {
-        /* already gone */
-      }
-      this._ws = null;
-    }
+    const unsubscribe = this._unsubscribe;
+    this._unsubscribe = null;
+    this._release(unsubscribe);
     if (this._oscillator) {
       try {
         this._oscillator.stop();
@@ -375,8 +403,11 @@ export class BticinoCallSession {
     this._pendingCandidates = [];
   }
 
-  stop() {
+  /** Lets go of everything the call holds: device slot, microphone, audio. */
+  _teardown() {
     this._wanted = false;
+    // anything still awaiting a reply belongs to an attempt that is over
+    this._attempt += 1;
     if (this._reconnectTimer) {
       clearTimeout(this._reconnectTimer);
       this._reconnectTimer = null;
@@ -391,6 +422,20 @@ export class BticinoCallSession {
       this._audioCtx = null;
     }
     this.micActive = false;
+  }
+
+  /**
+   * A call that cannot go on releases the device at once. On a kiosk nobody
+   * may be there to tap Dismiss, and until the subscription is closed the
+   * bridge keeps one of its few peer slots for a call that is not coming.
+   */
+  _fail(message) {
+    this._teardown();
+    this._set(CALL_STATE.ERROR, message);
+  }
+
+  stop() {
+    this._teardown();
     this._set(CALL_STATE.CLOSED);
   }
 }

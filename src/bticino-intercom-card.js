@@ -43,8 +43,9 @@
  */
 
 import { BticinoCallSession, CALL_STATE } from './shared/webrtc.js';
+import { VERSION } from './shared/version.js';
 
-const CARD_VERSION = '2026.10.0';
+const CARD_VERSION = VERSION;
 
 // ---------------------------------------------------------------------------
 // i18n — covers all BTicino intercom markets
@@ -1360,10 +1361,19 @@ class BticinoIntercomCard extends HTMLElement {
       onState: (session) => {
         if (this._session === session) this._onCallState(session);
       },
-      onNotice: (key) => this._showError(CALL_NOTICES[key] || key),
+      // a notice is something to read, not a failure: the call stays live,
+      // and one that lands after the hang-up belongs to a call that is over
+      onNotice: (key) => {
+        if (this._session === call) this._notify(CALL_NOTICES[key] || key);
+      },
     });
     this._session = call;
     call.start();
+  }
+
+  /** Home Assistant's own toast, which tells without covering the video. */
+  _notify(message) {
+    this.dispatchEvent(new CustomEvent('hass-notification', { detail: { message }, bubbles: true, composed: true }));
   }
 
   /** Everything the card draws about a call, taken from the call itself. */
