@@ -278,9 +278,11 @@ HACS installs a single file per plugin, so `npm run build` bundles both into
 users who track the default branch rather than a release. CI builds it again and fails if it
 differs, so it can never drift from the source.
 
-`tools/card-demo/` runs the card straight from `src/` against a fake intercom, so the doorbell, the
-door, the light, the notification link and a call can be driven without a device - and without a
-build, since the browser follows the imports itself. A small regression suite drives the real
+`tools/card-demo/` runs both cards straight from `src/` against a fake intercom, so the doorbell,
+the door, the light, the notification link and a call can be driven without a device - and without
+a build, since the browser follows the imports itself. The call is the real one: only the far end
+is simulated, a bridge with two peer slots played by a second peer connection in the page, so a busy
+or silent device, a dropped call and an older integration can all be tried. A small regression suite drives the real
 editor element in a headless DOM (happy-dom) to guard against config-editor regressions:
 
 ```bash

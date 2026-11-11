@@ -53,6 +53,7 @@ h2:first-of-type { margin-top: 0; }
   display: flex; flex-direction: column; gap: 10px;
 }
 .panel h3 { margin: 0; font-size: 13px; font-weight: 500; }
+.panel h4 { margin: 4px 0 0; font-size: 12px; font-weight: 500; color: var(--secondary-text-color); }
 .state { font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--secondary-background-color); }
 .state b { font-weight: 600; }
 .row { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -111,6 +112,7 @@ body.shot.shot-kiosk { padding: 0; background: transparent; }
   <h2>device</h2><div id="g3"></div>
   <h2>compact</h2><div id="g4"></div>
   <h2>default, with a free action for a non-BTicino gate</h2><div id="g5"></div>
+  <h2>bticino-intercom-card - the other card in the same file, on the same call</h2><div id="g7"></div>
 </div>
 
 <div class="panel">
@@ -121,10 +123,6 @@ body.shot.shot-kiosk { padding: 0; background: transparent; }
     <button class="sim go" id="btn-ring-gate">Ring gate</button>
   </div>
   <div class="row">
-    <button class="sim" id="btn-units">One entrance only</button>
-    <button class="sim" id="btn-kiosk">Kiosk: upright</button>
-  </div>
-  <div class="row">
     <button class="sim" id="btn-answer">Answer at the monitor</button>
     <button class="sim" id="btn-visitor">Visitor hangs up</button>
   </div>
@@ -132,12 +130,28 @@ body.shot.shot-kiosk { padding: 0; background: transparent; }
     <button class="sim" id="btn-notify">Notification: tap Answer</button>
   </div>
   <div class="row">
-    <button class="sim" id="btn-offline">Go offline</button>
-    <button class="sim" id="btn-clear">Clear history</button>
+    <button class="sim" id="btn-units">One entrance only</button>
+    <button class="sim" id="btn-legacy">Drop module_id</button>
+  </div>
+  <div class="row">
+    <button class="sim" id="btn-kiosk">Kiosk: upright</button>
+    <button class="sim" id="btn-kiosk-controls">Kiosk: hide controls</button>
+  </div>
+  <h4>The device and the integration</h4>
+  <div class="row">
+    <button class="sim" id="btn-busy">Device busy</button>
+    <button class="sim" id="btn-silent">Device silent</button>
+  </div>
+  <div class="row">
+    <button class="sim" id="btn-drop">Drop the call</button>
+    <button class="sim" id="btn-integration">Older integration</button>
   </div>
   <div class="row">
     <button class="sim" id="btn-mic">Refuse microphone</button>
-    <button class="sim" id="btn-legacy">Drop module_id</button>
+    <button class="sim" id="btn-offline">Go offline</button>
+  </div>
+  <div class="row">
+    <button class="sim" id="btn-clear">Clear history</button>
   </div>
   <div class="swatches" id="swatches"></div>
   <div class="row">
@@ -227,7 +241,10 @@ const sim = {
   timers: {},
 };
 
+// a headless screenshot has no log on screen to read, so it goes to the console
+const mirrorLog = new URLSearchParams(location.search).has("shot");
 function log(message) {
+  if (mirrorLog) console.info(`[sim] ${message}`);
   const line = document.createElement("div");
   const now = new Date().toLocaleTimeString("en-GB");
   line.innerHTML = `${now}  <span>${message}</span>`;
@@ -255,6 +272,10 @@ function ring(which = MODULE_FRONT) {
   };
   sim.calls.unshift(sim.open);
   log("doorbell: incoming call from " + (which === MODULE_GATE ? GATE : MODULE));
+  fireCallEvent({
+    type: "ring", session_id: sim.open.event_id, module_name: sim.open.module_name, snapshot_url: sim.snapshot,
+    camera_entity_id: which === MODULE_GATE ? "camera.bticino_cancello" : "camera.bticino_ingresso",
+  });
   clearTimer("ring");
   sim.timers.ring = setTimeout(() => endCall(false, "nobody answered"), 30000);
   publish();
@@ -279,6 +300,7 @@ function endCall(answered, why) {
   if (sim.open) {
     sim.open.answered = answered;
     sim.open.event_type = answered ? "answered_elsewhere" : "terminated";
+    fireCallEvent({ type: "end", session_id: sim.open.event_id });
     sim.open = null;
   }
   log(`call closed: ${answered ? "answered" : "missed"} (${why})`);
@@ -392,14 +414,12 @@ function makeHass() {
       else if (domain === "bticino_intercom" && service === "reject_call") endCall(false, "rejected from the card");
       else log(`service ${domain}.${service} ${JSON.stringify(data || {})}`);
     },
-    callWS: async (msg) => {
-      if (msg.type === "bticino_intercom/history") return { events: sim.calls.slice(0, msg.limit || 50) };
-      throw new Error(`command not simulated: ${msg.type}`);
-    },
+    connection,
+    callWS,
   };
 }
 
-/* ------------------------------------------- a call that does not need HA */
+/* ------------------------------------------------- the picture it sends */
 
 /** A moving picture, so the live view has a real video track to show. */
 function fakeCameraStream() {
@@ -432,57 +452,161 @@ function fakeCameraStream() {
   return { stream, stop: () => clearInterval(timer) };
 }
 
-class FakeSession {
-  constructor({ entityId, wantsVideo, onState, onNotice }) {
-    this.entityId = entityId;
-    this.wantsVideo = wantsVideo;
-    this.onState = onState;
-    this.onNotice = onNotice || (() => {});
-    this.state = "connecting";
-    this.micActive = false;
-    this.error = null;
-    this.stream = new MediaStream();
+/* ------------------------------------------- the other end of the call */
+
+// The cards run their real call, src/shared/webrtc.js, exactly as they do in
+// Home Assistant. What is simulated is everything on the far side of it: the
+// connection the offer travels on, the integration that answers it, and a
+// bridge with few peer slots, played by a second RTCPeerConnection in this
+// page that sends the moving picture back.
+const device = {
+  slots: 2,            // the BNC1 has few; two is enough to run out of them
+  sessions: new Map(), // HA WebRTC session id -> what the bridge holds for it
+  heldElsewhere: 0,    // slots taken by someone else: "Device busy"
+  silent: false,       // takes the slot and never answers: "Device silent"
+  knowsConnected: true, // the integration has bticino_intercom/webrtc_connected
+};
+let sessionCount = 0;
+const slotsInUse = () => device.sessions.size + device.heldElsewhere;
+const slotLine = () => `${slotsInUse()}/${device.slots} peer slots`;
+
+/** What camera/webrtc/offer does: a session, then an answer and candidates. */
+async function deviceOffer(callback, message) {
+  const entityId = message.entity_id;
+  if (slotsInUse() >= device.slots) {
+    log(`device: refused ${entityId}, Max number of peers reached (${slotLine()})`);
+    callback({ type: "error", code: "webrtc_offer_failed", message: "Max number of peers reached" });
+    return null;
   }
-  async start() {
-    log(`WebRTC call to ${this.entityId} (${this.wantsVideo ? "audio and video" : "audio only"})`);
-    this.onState(this);
-    this._timer = setTimeout(() => {
-      if (this.wantsVideo) {
-        this._camera = fakeCameraStream();
-        this.stream = this._camera.stream;
-      }
-      this.state = "live";
-      this.micActive = !sim.micRefused;
-      if (sim.micRefused) this.onNotice("mic_denied");
-      log(`call connected, microphone ${this.micActive ? "live" : "refused"}`);
-      this.onState(this);
-    }, 1200);
+  const sessionId = `s${++sessionCount}`;
+  const pc = new RTCPeerConnection();
+  const held = { pc, entityId, camera: null, audio: null };
+  device.sessions.set(sessionId, held);
+  log(`device: ${entityId} took a peer slot, session ${sessionId} (${slotLine()})`);
+  callback({ type: "session", session_id: sessionId });
+  renderState();
+  if (device.silent) {
+    log("device: ...and never answers");
+    return sessionId;
   }
-  async setMic(on) {
-    if (on && sim.micRefused) {
-      log("microphone refused by the browser");
-      this.micActive = false;
-      this.onNotice("mic_denied");
-      this.onState(this);
-      return;
+
+  pc.onicecandidate = (event) => {
+    if (!event.candidate || !device.sessions.has(sessionId)) return;
+    callback({ type: "candidate",
+      candidate: { candidate: event.candidate.candidate, sdp_m_line_index: event.candidate.sdpMLineIndex } });
+  };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "connected") log(`device: media up on ${sessionId}`);
+  };
+  await pc.setRemoteDescription({ type: "offer", sdp: message.offer });
+  // a picture from an entrance, none from the indoor monitor; a silent voice
+  // either way, since it is the card's own audio path that is being tried
+  held.audio = new AudioContext();
+  const voice = held.audio.createMediaStreamDestination().stream.getAudioTracks()[0];
+  for (const transceiver of pc.getTransceivers()) {
+    if (transceiver.receiver.track.kind === "video") {
+      held.camera = fakeCameraStream();
+      await transceiver.sender.replaceTrack(held.camera.stream.getVideoTracks()[0]);
+      transceiver.direction = "sendonly";
+    } else {
+      await transceiver.sender.replaceTrack(voice);
+      transceiver.direction = "sendrecv";
     }
-    this.micActive = on;
-    log(`microphone ${on ? "on" : "off"}`);
-    this.onState(this);
   }
-  stop() {
-    clearTimeout(this._timer);
-    this._camera?.stop();
-    this.state = "closed";
-    this.micActive = false;
-    log("call closed");
-    this.onState(this);
+  const answer = await pc.createAnswer();
+  await pc.setLocalDescription(answer);
+  if (device.sessions.has(sessionId)) callback({ type: "answer", answer: answer.sdp });
+  return sessionId;
+}
+
+/** Ending a subscription is what hands the bridge its slot back. */
+function deviceRelease(sessionId, why) {
+  const held = device.sessions.get(sessionId);
+  if (!held) return;
+  device.sessions.delete(sessionId);
+  held.pc.close();
+  held.camera?.stop();
+  held.audio?.close();
+  log(`device: session ${sessionId} released (${why}), ${slotLine()}`);
+  renderState();
+}
+
+// One connection for the whole page, the way Home Assistant has one.
+const callListeners = new Set();
+const connection = {
+  subscribeMessage(callback, message, options = {}) {
+    if (message.type !== "camera/webrtc/offer") return Promise.reject(new Error(`not simulated: ${message.type}`));
+    log(`offer from ${message.entity_id} on the page's own connection, resubscribe: ${options.resubscribe !== false}`);
+    let sessionId = null;
+    let released = false;
+    const done = deviceOffer(callback, message).then((id) => {
+      sessionId = id;
+      if (released && id) deviceRelease(id, "the card let go while it was being set up");
+    });
+    return Promise.resolve(() => {
+      released = true;
+      if (sessionId) deviceRelease(sessionId, "the card unsubscribed");
+      return done;
+    });
+  },
+  // what the other card listens to for its ring overlay
+  subscribeEvents(callback, eventType) {
+    if (eventType !== "bticino_intercom_call") return Promise.resolve(() => {});
+    callListeners.add(callback);
+    return Promise.resolve(() => callListeners.delete(callback));
+  },
+};
+const fireCallEvent = (data) => {
+  for (const listener of callListeners) listener({ data });
+};
+
+async function callWS(message) {
+  if (message.type === "bticino_intercom/history") return { events: sim.calls.slice(0, message.limit || 50) };
+  if (message.type === "camera/webrtc/get_client_config") return { configuration: { iceServers: [] } };
+  if (message.type === "camera/webrtc/candidate") {
+    const held = device.sessions.get(message.session_id);
+    if (held) await held.pc.addIceCandidate(message.candidate).catch(() => {});
+    return null;
   }
+  if (message.type === "bticino_intercom/webrtc_connected") {
+    if (!device.knowsConnected) {
+      log(`integration: unknown command ${message.type} - an older integration, and the card carries on`);
+      throw { code: "unknown_command", message: "Unknown command." };
+    }
+    log(`integration: webrtc_connected for ${message.entity_id}, session ${message.session_id}`);
+    return null;
+  }
+  // the other card signs its snapshot URLs; here they are already data URLs
+  if (message.type === "auth/sign_path") {
+    const camera = /camera_proxy\/(.+)$/.exec(message.path)?.[1];
+    return { path: camera ? buildStates()[camera]?.attributes.entity_picture || message.path : message.path };
+  }
+  if (message.type === "media_source/browse_media") return { children: [] };
+  throw new Error(`command not simulated: ${message.type}`);
+}
+
+// The browser's microphone, without a prompt: a quiet tone, or a refusal.
+if (navigator.mediaDevices) {
+  navigator.mediaDevices.getUserMedia = async () => {
+    if (sim.micRefused) {
+      log("browser: microphone refused");
+      throw new DOMException("Permission denied", "NotAllowedError");
+    }
+    const audio = new AudioContext();
+    const tone = audio.createOscillator();
+    const out = audio.createMediaStreamDestination();
+    tone.connect(out);
+    tone.start();
+    log("browser: microphone granted");
+    return out.stream;
+  };
 }
 
 /* ------------------------------------------------------------------ boot */
 
 const cards = [];
+// cards that take their own config, so the colour swatches leave them alone
+const others = [];
 const CARD_COLOURS = ["blue", "indigo", "purple", "pink", "red", "deep-orange", "amber", "green", "teal"];
 let colour = "blue";
 let kioskLandscape = true;
@@ -512,7 +636,7 @@ function openFromNotification(camera) {
 
 function publish() {
   const hass = makeHass();
-  for (const card of cards) card.hass = hass;
+  for (const card of [...cards, ...others]) card.hass = hass;
   renderState();
 }
 
@@ -521,7 +645,9 @@ function renderState() {
   document.getElementById("state").innerHTML =
     `<b>${where}</b><br>lock ${sim.lockOpen ? "released" : "closed"} - light ${sim.light ? "on" : "off"}`
     + ` - ${sim.offline ? "offline" : "online"}`
-    + `<br>${sim.twoUnits ? "two" : "one"} entrance${sim.twoUnits ? "s" : ""} - ${sim.calls.length} calls in the log`;
+    + `<br>${sim.twoUnits ? "two" : "one"} entrance${sim.twoUnits ? "s" : ""} - ${sim.calls.length} calls in the log`
+    + `<br>${slotLine()}${device.silent ? " - device silent" : ""}`
+    + ` - ${device.knowsConnected ? "integration knows webrtc_connected" : "older integration"}`;
   const busy = sim.ringing || sim.talking || sim.offline;
   document.getElementById("btn-ring").disabled = busy;
   document.getElementById("btn-ring-gate").disabled = busy || !sim.twoUnits;
@@ -531,36 +657,18 @@ function renderState() {
   document.getElementById("btn-offline").textContent = sim.offline ? "Back online" : "Go offline";
   document.getElementById("btn-mic").textContent = sim.micRefused ? "Allow microphone" : "Refuse microphone";
   document.getElementById("btn-legacy").textContent = sim.legacy ? "Restore module_id" : "Drop module_id";
+  document.getElementById("btn-busy").textContent = device.heldElsewhere ? "Free the device" : "Device busy";
+  document.getElementById("btn-silent").textContent = device.silent ? "Device answers" : "Device silent";
+  document.getElementById("btn-drop").disabled = !device.sessions.size;
+  document.getElementById("btn-integration").textContent = device.knowsConnected ? "Older integration" : "Newer integration";
 }
 
 async function boot() {
-  const card = await import("../../src/bticino-100x-card.js?v=" + Date.now());
-  const t = card.t;
+  // both cards from their source, so an edit shows on reload; they share the
+  // call in src/shared/webrtc.js, and it runs here exactly as it does in HA
+  await import("../../src/bticino-100x-card.js?v=" + Date.now());
+  await import("../../src/bticino-intercom-card.js?v=" + Date.now());
   await customElements.whenDefined("bticino-100x-card");
-
-  // The simulator has no Home Assistant behind it, so the card's real WebRTC
-  // session is swapped for one that just works, to show the whole flow.
-  const CardClass = customElements.get("bticino-100x-card");
-  CardClass.prototype._startStream = function (entityId, mode) {
-    this._stopSession();
-    const session = new FakeSession({
-      entityId,
-      wantsVideo: mode === "video",
-      onState: () => { if (this._session === session && this._root) this._syncStream(); },
-      onNotice: (key) => this.dispatchEvent(
-        new CustomEvent("hass-notification", {
-          detail: { message: t(this.hass, key) },
-          bubbles: true,
-          composed: true,
-        }),
-      ),
-    });
-    this._session = session;
-    this._stream = { entityId, mode };
-    this._soundOn = true;
-    session.start();
-    this._sync();
-  };
 
   const add = (target, config) => {
     const card = document.createElement("bticino-100x-card");
@@ -613,6 +721,18 @@ async function boot() {
     actions: [{ entity: "lock.driveway_gate", name: "Driveway", icon: "mdi:gate" }],
   });
 
+  // the card this repository started with: its own look, the same call
+  const intercom = document.createElement("bticino-intercom-card");
+  intercom.setConfig({
+    intercoms: [
+      { name: MODULE, camera: "camera.bticino_ingresso", call_home: "camera.bticino_call_home",
+        actions: [{ entity: "lock.bticino_porta_esterna" }, { entity: "light.bticino_luce_scale" }] },
+      { name: GATE, camera: "camera.bticino_cancello" },
+    ],
+  });
+  document.getElementById("g7").appendChild(intercom);
+  others.push(intercom);
+
   document.getElementById("btn-ring").onclick = () => ring(MODULE_FRONT);
   document.getElementById("btn-ring-gate").onclick = () => ring(MODULE_GATE);
   document.getElementById("btn-answer").onclick = answerAtMonitor;
@@ -659,6 +779,51 @@ async function boot() {
   document.getElementById("btn-notify").onclick = () =>
     openFromNotification("camera.bticino_ingresso");
 
+  // a call screen that leaves the controls off keeps the mic and the sound
+  let kioskControls = true;
+  document.getElementById("btn-kiosk-controls").onclick = () => {
+    kioskControls = !kioskControls;
+    const kiosk = cards.find((card) => card.__config.layout === "kiosk");
+    kiosk.__config = { ...kiosk.__config, show_controls: kioskControls };
+    kiosk.setConfig({ ...kiosk.__config, color: colour });
+    document.getElementById("btn-kiosk-controls").textContent = kioskControls ? "Kiosk: hide controls" : "Kiosk: show controls";
+    log(`kiosk: show_controls ${kioskControls}`);
+    publish();
+  };
+
+  // someone else - the app on a phone, another tablet - holds every slot
+  document.getElementById("btn-busy").onclick = () => {
+    device.heldElsewhere = device.heldElsewhere ? 0 : device.slots;
+    log(device.heldElsewhere ? `device: every peer slot taken elsewhere (${slotLine()})` : `device: the other viewers let go (${slotLine()})`);
+    renderState();
+  };
+  // the bridge takes a slot and never answers: the card's 15 second timeout
+  document.getElementById("btn-silent").onclick = () => {
+    device.silent = !device.silent;
+    log(device.silent ? "device: will take the next slot and never answer" : "device: answers again");
+    renderState();
+  };
+  // the network or the bridge drops every call it holds; the cards reconnect
+  document.getElementById("btn-drop").onclick = () => {
+    if (!device.sessions.size) {
+      log("device: no call to drop");
+      return;
+    }
+    for (const [sessionId, held] of device.sessions) {
+      held.pc.close();
+      held.camera?.stop();
+      held.audio?.close();
+      device.sessions.delete(sessionId);
+      log(`device: dropped session ${sessionId}, ${slotLine()} - the card notices in a few seconds`);
+    }
+    renderState();
+  };
+  document.getElementById("btn-integration").onclick = () => {
+    device.knowsConnected = !device.knowsConnected;
+    log(device.knowsConnected ? "integration: knows webrtc_connected" : "integration: older, no webrtc_connected");
+    renderState();
+  };
+
   log("simulator ready");
 
   // A screenshot rig as much as a simulator: ?shot=<card> leaves that card
@@ -667,6 +832,17 @@ async function boot() {
   const query = new URLSearchParams(location.search);
   const wanted = query.get("shot");
   if (wanted) {
+    // A headless Chrome never gets a WebRTC call up between two peer
+    // connections in one page - offer, answer and candidates all cross, the
+    // media does not - and a screenshot needs the picture, not the network.
+    // So in this mode, and only in this mode, the call goes live at once on
+    // the simulated camera, with no device behind it.
+    const { BticinoCallSession } = await import("../../src/shared/webrtc.js");
+    BticinoCallSession.prototype.start = async function () {
+      if (this.wantsVideo) this.stream = fakeCameraStream().stream;
+      this.micActive = true;
+      this._set("live");
+    };
     const kiosk = wanted === "kiosk";
     const host = document.getElementById(kiosk ? "g6" : wanted);
     document.body.classList.add("shot");
